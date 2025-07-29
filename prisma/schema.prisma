@@ -11,6 +11,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+
 // Enums
 enum Difficulty {
   easy
@@ -21,7 +22,7 @@ enum Difficulty {
 enum ReminderType {
   easy    // 3 days
   medium  // 7 days
-  hard    // 14 days (or custom)
+  hard    // 14 days (or use customReminderDays if set)
 }
 
 enum CompletionStatus {
@@ -30,23 +31,21 @@ enum CompletionStatus {
   skipped     // User skipped this question
   failed      // Attempted but failed
 }
-
-// Core Application Models
 model User {
-  id            String     @id @default(cuid())
-  name          String?
-  email         String     @unique
-  emailVerified Boolean    @default(false)
-  image         String?
-  createdAt     DateTime   @default(now())
-  updatedAt     DateTime   @updatedAt
-  
-  // Progress tracking
-  userProgress  UserProgress[]
-  
-  // Better Auth relations
-  sessions      Session[]
-  accounts      Account[]
+  id               String     @id @default(cuid())
+  name             String?
+  email            String     @unique
+  emailVerified    Boolean    @default(false)
+  image            String?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  leetcodeUsername String?   @unique
+
+  userProgress     UserProgress[]
+  externalAttempts ExternalQuestionAttempt[]
+  sessions         Session[]
+  accounts         Account[]
+
   @@map("user")
 }
 
@@ -57,27 +56,22 @@ model Topic {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   questionTopics QuestionTopic[]
-  
+
   @@index([name])
 }
 
-// Clean Question Schema - No user dependencies
 model Question {
-  id             Int             @id @default(autoincrement())
-  title          String          @db.VarChar(300)
-  link           String?         @db.VarChar(500)
-  difficulty     Difficulty
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  
-  // Default reminder settings based on difficulty
-  defaultReminderDays Int         @default(7) // Can be overridden per user
-  
-  // Relations
-  questionTopics QuestionTopic[]
-  userProgress   UserProgress[]
-  
-  // Indexes for performance
+  id                  Int             @id @default(autoincrement())
+  title               String          @db.VarChar(300)
+  link                String?         @db.VarChar(500)
+  difficulty          Difficulty
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  slug                String?         @unique
+
+  questionTopics      QuestionTopic[]
+  userProgress        UserProgress[]
+
   @@index([difficulty])
   @@index([createdAt])
   @@index([difficulty, createdAt])
@@ -88,67 +82,65 @@ model QuestionTopic {
   topicId    Int
   question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
   topic      Topic    @relation(fields: [topicId], references: [id], onDelete: Cascade)
-  
+
   @@id([questionId, topicId])
   @@index([topicId])
 }
 
-// User Progress Tracking - The heart of your system
 model UserProgress {
-  id             String           @id @default(cuid())
-  userId         String
-  questionId     Int
-  
-  // Completion tracking
-  status         CompletionStatus @default(pending)
-  firstCompletedAt DateTime?      // When user first completed this question
-  lastCompletedAt  DateTime?      // Most recent completion
-  completionCount  Int            @default(0) // How many times completed
-  
-  // Revision/Reminder system
-  reminderType     ReminderType   @default(medium) // User can customize
-  customReminderDays Int?         // Override default reminder days
-  nextReminderAt   DateTime?      // When to remind next
-  lastRemindedAt   DateTime?      // When last reminder was sent
-  
-  // Metadata
-  notes          String?          @db.Text // User can add personal notes
-  timeSpentMinutes Int?           // Optional: track time spent
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  
-  // Relations
-  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  question       Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  
-  // Constraints
-  @@unique([userId, questionId]) // One progress record per user per question
-  @@index([userId, status])      // Query user's completed/pending questions
-  @@index([nextReminderAt])      // Query questions due for reminder
-  @@index([userId, nextReminderAt]) // User-specific reminder queries
-  @@index([lastCompletedAt])     // Track recent activity
+  id                 String           @id @default(cuid())
+  userId             String
+  questionId         Int
+  status             CompletionStatus @default(pending)
+  firstCompletedAt   DateTime?        // Track when user first completed
+  lastCompletedAt    DateTime?        // For calendar-like tracking
+  completionCount    Int              @default(0)
+  reminderType       ReminderType     @default(medium)
+  customReminderDays Int?             // Optional custom override
+  nextReminderAt     DateTime?
+  lastRemindedAt     DateTime?
+  notes              String?          @db.Text
+  timeSpentMinutes   Int?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question           Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, questionId])
+  @@index([userId, status])
+  @@index([nextReminderAt])
+  @@index([userId, nextReminderAt])
+  @@index([lastCompletedAt])
 }
 
-// Optional: Track detailed attempt history
 model QuestionAttempt {
   id           String           @id @default(cuid())
   userId       String
   questionId   Int
-  
-  // Attempt details
-  status       CompletionStatus // completed, failed, skipped
-  timeSpent    Int?             // Minutes spent on this attempt
+  status       CompletionStatus
+  timeSpent    Int?
   notes        String?          @db.Text
   attemptedAt  DateTime         @default(now())
-  
-  // Relations (no direct foreign keys to avoid cascading issues)
-  // You'll join these manually in your queries
-  
+
   @@index([userId, questionId, attemptedAt])
   @@index([attemptedAt])
 }
 
-// Better Auth Models (Keep as-is for compatibility)
+model ExternalQuestionAttempt {
+  id          String            @id @default(cuid())
+  userId      String
+  title       String
+  slug        String?
+  link        String?
+  difficulty  Difficulty?
+  status      CompletionStatus  @default(completed)
+  attemptedAt DateTime          @default(now())
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, attemptedAt])
+  @@index([slug])
+}
+
 model Session {
   id        String   @id
   expiresAt DateTime
@@ -159,6 +151,7 @@ model Session {
   userAgent String?
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@map("session")
 }
 
@@ -177,6 +170,7 @@ model Account {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([providerId, accountId])
   @@map("account")
 }
@@ -188,6 +182,7 @@ model Verification {
   expiresAt  DateTime
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+
   @@unique([identifier, value])
   @@map("verification")
 }
